@@ -25,6 +25,10 @@ log = logging.getLogger(__name__)
 JobFn = Callable[[str, Settings], None]
 
 
+def _warm_up() -> None:
+    """No-op task: unpickling it in a worker imports this module and the geo stack."""
+
+
 class JobRunner:
     def __init__(self, settings: Settings, job_fn: JobFn = process_file) -> None:
         self.settings = settings
@@ -42,6 +46,7 @@ class JobRunner:
             self.settings.workers,
             mp_context=multiprocessing.get_context("spawn"),
             initializer=configure_logging,
+            initargs=(self.settings.log_level, self.settings.log_format),
             max_tasks_per_child=100,
         )
 
@@ -49,6 +54,11 @@ class JobRunner:
         with self._lock:
             self._pool = self._new_pool()
             self._closed = False
+            if self.settings.worker_mode == "process":
+                # Workers spawn lazily and must import GDAL/PROJ/GEOS (~1-2 s); start them
+                # now so the first upload is as fast as the rest.
+                for _ in range(self.settings.workers):
+                    self._pool.submit(_warm_up)
 
     def recover(self) -> int:
         """Resubmit jobs left PENDING or PROCESSING by a previous run."""
