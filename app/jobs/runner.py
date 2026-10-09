@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import multiprocessing
+import os
 import threading
 from collections.abc import Callable
 from concurrent.futures import Executor, Future, ProcessPoolExecutor, ThreadPoolExecutor
@@ -29,6 +30,21 @@ def _warm_up() -> None:
     """No-op task: unpickling it in a worker imports this module and the geo stack."""
 
 
+def _init_worker(log_level: str, log_format: str) -> None:
+    configure_logging(log_level, log_format)
+    # If the API process is killed outright (no graceful shutdown), its workers would keep
+    # running: on Windows a worker blocked on the task queue never sees the parent go away.
+    # Block on the parent's process handle in a daemon thread and exit when it disappears.
+    parent = multiprocessing.parent_process()
+    if parent is not None:
+
+        def exit_with_parent() -> None:
+            parent.join()
+            os._exit(0)
+
+        threading.Thread(target=exit_with_parent, name="parent-watchdog", daemon=True).start()
+
+
 class JobRunner:
     def __init__(self, settings: Settings, job_fn: JobFn = process_file) -> None:
         self.settings = settings
@@ -45,7 +61,7 @@ class JobRunner:
         return ProcessPoolExecutor(
             self.settings.workers,
             mp_context=multiprocessing.get_context("spawn"),
-            initializer=configure_logging,
+            initializer=_init_worker,
             initargs=(self.settings.log_level, self.settings.log_format),
             max_tasks_per_child=100,
         )
