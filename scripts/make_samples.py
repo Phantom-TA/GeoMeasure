@@ -34,7 +34,9 @@ def _zip_shapefile(
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
             for part in sorted(Path(tmp).glob(f"{name}.*")):
                 if part.suffix not in drop:
-                    zf.write(part, f"{name}/{part.name}")
+                    # fixed timestamp keeps regenerated archives byte-identical
+                    info = zipfile.ZipInfo(f"{name}/{part.name}", date_time=(2024, 1, 1, 0, 0, 0))
+                    zf.writestr(info, part.read_bytes(), zipfile.ZIP_DEFLATED)
         return buf.getvalue()
 
 
@@ -119,8 +121,9 @@ def fiji_kml() -> str:
 
 def main() -> None:
     OUT.mkdir(exist_ok=True)
-    (OUT / "farm_survey.kml").write_text(farm_survey_kml(), encoding="utf-8")
-    (OUT / "fiji_antimeridian.kml").write_text(fiji_kml(), encoding="utf-8")
+    # fixed line endings so regenerated samples are byte-identical on every OS
+    (OUT / "farm_survey.kml").write_bytes(farm_survey_kml().encode("utf-8"))
+    (OUT / "fiji_antimeridian.kml").write_bytes(fiji_kml().encode("utf-8"))
 
     rng = np.random.default_rng(7)
     parcels, ids, owners, crops = [], [], [], []
