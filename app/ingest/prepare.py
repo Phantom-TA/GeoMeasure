@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import re
 import zipfile
 from dataclasses import dataclass, field
 from enum import StrEnum
-from pathlib import Path
+from pathlib import Path, PurePath
 
 from pyproj import CRS
 
@@ -53,19 +54,27 @@ def prepare(
 ) -> PreparedSource:
     """Validate the upload and place the files GDAL needs into workdir."""
     limits = limits or ArchiveLimits()
+    # GDAL names a folder-less KML layer after the file, so use the upload's name for it
+    kml = workdir / f"{_safe_stem(filename)}.kml"
     if detect_container(upload, filename) is Container.KML:
-        kml = workdir / "doc.kml"
         copy_file(upload, kml)
         return PreparedSource(SourceFormat.KML, kml=kml)
 
     try:
         with zipfile.ZipFile(upload) as zf:
-            return _prepare_zip(zf, workdir, limits)
+            return _prepare_zip(zf, workdir, limits, kml)
     except zipfile.BadZipFile as exc:
         raise IngestError("invalid_archive", f"The zip file is corrupt: {exc}") from exc
 
 
-def _prepare_zip(zf: zipfile.ZipFile, workdir: Path, limits: ArchiveLimits) -> PreparedSource:
+def _safe_stem(filename: str) -> str:
+    stem = re.sub(r"[^A-Za-z0-9_-]+", "_", PurePath(filename).stem).strip("_")
+    return stem[:64] or "doc"
+
+
+def _prepare_zip(
+    zf: zipfile.ZipFile, workdir: Path, limits: ArchiveLimits, kml: Path
+) -> PreparedSource:
     contents = inspect_zip(zf, limits)
     budget = ExtractionBudget(limits.max_uncompressed_bytes)
 
@@ -92,7 +101,6 @@ def _prepare_zip(zf: zipfile.ZipFile, workdir: Path, limits: ArchiveLimits) -> P
             (i for i in contents.kml if i.filename.replace("\\", "/").lower() == "doc.kml"),
             contents.kml[0],
         )
-        kml = workdir / "doc.kml"
         budget.extract(zf, main, kml)
         source = PreparedSource(SourceFormat.KMZ, kml=kml, issues=contents.issues)
         if len(contents.kml) > 1:
