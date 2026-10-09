@@ -1,0 +1,12 @@
+# Pinned runtime dependencies (used by the Docker image). Ranges live in pyproject.toml.
+fastapi==0.143.0
+starlette==1.7.0
+uvicorn[standard]==0.54.0
+pydantic==2.14.0
+pydantic-settings==2.15.0
+python-multipart==0.0.32
+pyogrio==0.13.0
+shapely==2.2.0
+pyproj==3.8.0
+numpy==2.5.3
+SQLAlchemy==2.1.4

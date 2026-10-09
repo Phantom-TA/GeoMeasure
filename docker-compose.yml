@@ -1,0 +1,15 @@
+services:
+  api:
+    build: .
+    image: geomeasure:latest
+    ports:
+      - "8000:8000"
+    environment:
+      GEO_WORKERS: "2"
+      GEO_MAX_UPLOAD_BYTES: "104857600"
+    volumes:
+      - geodata:/data
+    restart: unless-stopped
+
+volumes:
+  geodata:

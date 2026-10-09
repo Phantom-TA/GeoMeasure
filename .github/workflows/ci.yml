@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: test (${{ matrix.os }}, py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, python: "3.11" }
+          - { os: ubuntu-latest, python: "3.12" }
+          - { os: windows-latest, python: "3.12" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: mypy app
+      - run: pytest --cov=app --cov-report=term-missing
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t geomeasure .
+      - name: smoke test the image
+        run: |
+          docker run -d --name geo -p 8000:8000 geomeasure
+          for i in $(seq 1 30); do curl -fs localhost:8000/health && break; sleep 1; done
+          curl -fs -H "Prefer: wait=20" -F "file=@samples/farm_survey.kml" \
+            localhost:8000/api/files | tee response.json
+          grep -q '"status":"COMPLETED"' response.json
+      - if: failure()
+        run: docker logs geo
