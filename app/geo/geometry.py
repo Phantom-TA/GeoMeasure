@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable
+from typing import TypeVar
 
 import numpy as np
 import shapely
@@ -52,12 +53,18 @@ def split_parts(geom: BaseGeometry) -> tuple[list[Polygon], list[LineString]]:
     return polygons, lines
 
 
-def transform(geom: BaseGeometry, transformer: Transformer) -> BaseGeometry:
+G = TypeVar("G", BaseGeometry, np.ndarray)
+
+
+def transform(geom: G, transformer: Transformer) -> G:
+    """Transform one geometry, or a whole array of them in a single pyproj call."""
+
     def fn(xy: Coords) -> Coords:
         x, y = transformer.transform(xy[:, 0], xy[:, 1])
         return np.column_stack([x, y])
 
-    return shapely.transform(geom, fn)
+    result: G = shapely.transform(geom, fn)
+    return result
 
 
 def _map_rings(geom: Polygon | LineString, fn: Callable[[Coords], Coords]) -> Polygon | LineString:

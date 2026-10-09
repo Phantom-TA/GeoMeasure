@@ -71,8 +71,9 @@ class FeatureRecord(Base):
     geometry_type: Mapped[str | None] = mapped_column(String(32))
     crs: Mapped[str | None] = mapped_column(Text)
     has_z: Mapped[bool] = mapped_column(default=False)
-    geometry: Mapped[dict[str, Any] | None]
-    geometry_wgs84: Mapped[dict[str, Any] | None]
+    # GeoJSON text: written in bulk by GEOS and streamed out by the export as-is
+    geometry: Mapped[str | None] = mapped_column(Text)
+    geometry_wgs84: Mapped[str | None] = mapped_column(Text)
     properties: Mapped[dict[str, Any]]
 
     status: Mapped[str] = mapped_column(String(16))

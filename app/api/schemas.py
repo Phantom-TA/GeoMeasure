@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 from datetime import UTC, datetime
 from typing import Any
@@ -212,6 +213,7 @@ class FeatureOut(BaseModel):
 
     @classmethod
     def from_record(cls, r: FeatureRecord, wgs84: bool) -> FeatureOut:
+        raw = r.geometry_wgs84 if wgs84 else r.geometry
         return cls(
             index=r.index,
             source_id=r.source_id,
@@ -219,7 +221,7 @@ class FeatureOut(BaseModel):
             geometry_type=r.geometry_type,
             crs="EPSG:4326" if wgs84 and r.geometry_wgs84 else r.crs,
             has_z=r.has_z,
-            geometry=r.geometry_wgs84 if wgs84 else r.geometry,
+            geometry=json.loads(raw) if raw else None,
             properties=r.properties,
             measurement=MeasurementOut.from_record(r),
         )

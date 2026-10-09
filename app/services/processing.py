@@ -3,26 +3,25 @@
 from __future__ import annotations
 
 import logging
-import math
 import tempfile
 import time
+import warnings
 from collections import Counter
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import shapely
 from pyproj import CRS, Transformer
 from pyproj.exceptions import CRSError, ProjError
-from shapely.geometry import mapping
-from shapely.geometry.base import BaseGeometry
 
 from app.core.config import Settings
 from app.db import repository
 from app.db.session import get_session_factory
-from app.geo.crs import WGS84, CrsContext, crs_label
-from app.geo.geometry import has_nonfinite, transform
+from app.geo.crs import WGS84, CrsContext, CrsKind, crs_label
+from app.geo.geometry import transform
 from app.geo.measure import MeasureOptions, measure_geometry
 from app.geo.types import Feature, Issue, Layer, Measurement, Strategy
 from app.ingest.errors import IngestError
@@ -87,43 +86,64 @@ def process_file(file_id: str, settings: Settings) -> None:
             )
 
 
-def _geojson(geom: BaseGeometry | None) -> dict[str, Any] | None:
-    if geom is None or geom.is_empty or has_nonfinite(geom):
-        return None
-    return dict(mapping(geom))
+# --- vectorised helpers: one native call per batch instead of one per feature ------------
+
+
+def _project(geoms: np.ndarray, transformer: Transformer) -> np.ndarray:
+    return np.asarray(transform(geoms, transformer), dtype=object)
+
+
+def _drop_unrenderable(geoms: np.ndarray) -> np.ndarray:
+    """None for missing, empty, or non-finite geometries (they have no valid GeoJSON)."""
+    out = geoms.copy()
+    out[shapely.is_empty(out)] = None
+    coords, idx = shapely.get_coordinates(out, include_z=True, return_index=True)
+    # 2D geometries report z as NaN, so only check z where the geometry really has one
+    bad_xy = ~np.isfinite(coords[:, :2]).all(axis=1)
+    bad_z = shapely.has_z(out)[idx] & ~np.isfinite(coords[:, 2])
+    out[np.unique(idx[bad_xy | bad_z])] = None
+    return out
+
+
+def _geojson(geoms: np.ndarray) -> list[str | None]:
+    return list(shapely.to_geojson(_drop_unrenderable(geoms)))
 
 
 @dataclass
 class _LayerSetup:
     ctx: CrsContext | None
     label: str | None
-    to_wgs84: Callable[[BaseGeometry], BaseGeometry | None]
     issues: list[Issue]
+    to_wgs84: Transformer | None = None
 
+    def lonlat(self, flat: np.ndarray) -> np.ndarray | None:
+        """Lon/lat geometries on the layer's datum (None if the CRS is unusable)."""
+        if self.ctx is None:
+            return None
+        if self.ctx.to_lonlat is None:
+            return flat
+        return _project(flat, self.ctx.to_lonlat)
 
-def _no_wgs84(_: BaseGeometry) -> None:
-    return None
+    def wgs84(self, flat: np.ndarray, lonlat: np.ndarray | None) -> np.ndarray | None:
+        if self.ctx is None or lonlat is None:
+            return None
+        if self.to_wgs84 is None:  # the layer's datum is WGS84, so lon/lat already is
+            return lonlat
+        return _project(flat, self.to_wgs84)
 
 
 def _layer_setup(layer: Layer) -> _LayerSetup:
     if layer.crs is None:
-        return _LayerSetup(None, None, _no_wgs84, [])
+        return _LayerSetup(None, None, [])
     label = crs_label(layer.crs)
     try:
         ctx = CrsContext.build(layer.crs)
-        if layer.crs.equals(WGS84, ignore_axis_order=True):
-            return _LayerSetup(ctx, label, shapely.force_2d, [])
-        transformer = Transformer.from_crs(layer.crs, WGS84, always_xy=True)
+        to_wgs84 = None
+        if not ctx.is_wgs84:
+            to_wgs84 = Transformer.from_crs(layer.crs, WGS84, always_xy=True)
     except (CRSError, ProjError) as exc:
-        return _LayerSetup(None, label, _no_wgs84, [Issue("crs_unusable", f"Unusable CRS: {exc}")])
-
-    def to_wgs84(geom: BaseGeometry) -> BaseGeometry | None:
-        try:
-            return transform(shapely.force_2d(geom), transformer)
-        except (ProjError, ValueError):
-            return None
-
-    return _LayerSetup(ctx, label, to_wgs84, [])
+        return _LayerSetup(None, label, [Issue("crs_unusable", f"Unusable CRS: {exc}")])
+    return _LayerSetup(ctx, label, [], to_wgs84)
 
 
 class ResultBuilder:
@@ -142,11 +162,10 @@ class ResultBuilder:
         self._totals: dict[str, float] = {}
         self._max_deviation: float | None = None
         self._with_issues = 0
-        self._bounds: tuple[float, float, float, float] | None = None
+        self._bounds: np.ndarray | None = None
         self._layer_info: list[dict[str, Any]] = []
 
     def batches(self) -> Iterator[list[dict[str, Any]]]:
-        batch: list[dict[str, Any]] = []
         for layer in self.layers:
             setup = _layer_setup(layer)
             self._layer_info.append(
@@ -158,48 +177,64 @@ class ResultBuilder:
                     "issues": [i.as_dict() for i in [*layer.issues, *setup.issues]],
                 }
             )
-            for feature in layer.features:
-                measurement = measure_geometry(feature.geometry, setup.ctx, self.options)
-                batch.append(self._row(feature, measurement, setup))
-                if len(batch) >= BATCH_SIZE:
-                    yield batch
-                    batch = []
-        if batch:
-            yield batch
+            for start in range(0, len(layer.features), BATCH_SIZE):
+                yield self._batch(layer.features[start : start + BATCH_SIZE], setup)
 
-    def _row(self, feature: Feature, m: Measurement, setup: _LayerSetup) -> dict[str, Any]:
-        geom = feature.geometry
-        wgs84 = setup.to_wgs84(geom) if geom is not None else None
-        wgs84_json = _geojson(wgs84)
-        issues = [i.as_dict() for i in [*feature.issues, *m.issues]]
-        self._track(feature, m, wgs84 if wgs84_json else None, bool(issues))
-        return {
-            "file_id": self.file_id,
-            "index": feature.index,
-            "layer": feature.layer,
-            "source_id": feature.source_id,
-            "geometry_type": feature.geometry_type,
-            "crs": setup.label,
-            "has_z": bool(geom is not None and shapely.has_z(geom)),
-            "geometry": _geojson(geom),
-            "geometry_wgs84": wgs84_json,
-            "properties": feature.properties,
-            "status": m.status.value,
-            "area_m2": m.area_m2,
-            "perimeter_m": m.perimeter_m,
-            "length_m": m.length_m,
-            "geodesic_area_m2": m.geodesic_area_m2,
-            "geodesic_perimeter_m": m.geodesic_perimeter_m,
-            "geodesic_length_m": m.geodesic_length_m,
-            "deviation_pct": m.deviation_pct,
-            "method": m.method.value if m.method else None,
-            "projections": m.projections,
-            "issues": issues,
-        }
+    def _batch(self, features: list[Feature], setup: _LayerSetup) -> list[dict[str, Any]]:
+        geoms = np.empty(len(features), dtype=object)
+        geoms[:] = [f.geometry for f in features]
+        flat = shapely.force_2d(geoms)
+        lonlat = setup.lonlat(flat)
+        wgs84 = setup.wgs84(flat, lonlat)
+        source_json = _geojson(geoms)
+        wgs84_json = _geojson(wgs84) if wgs84 is not None else [None] * len(features)
+        has_z = shapely.has_z(geoms)
+        if wgs84 is not None:
+            self._track_bounds(_drop_unrenderable(wgs84))
+        # Hand the pre-projected lon/lat to the engine only for projected layers; for
+        # geographic layers it would be the same geometry.
+        hints = (
+            lonlat if setup.ctx is not None and setup.ctx.kind is not CrsKind.GEOGRAPHIC else None
+        )
 
-    def _track(
-        self, feature: Feature, m: Measurement, wgs84: BaseGeometry | None, has_issues: bool
-    ) -> None:
+        rows = []
+        for i, feature in enumerate(features):
+            m = measure_geometry(
+                feature.geometry,
+                setup.ctx,
+                self.options,
+                lonlat=hints[i] if hints is not None else None,
+            )
+            issues = [x.as_dict() for x in [*feature.issues, *m.issues]]
+            self._track(feature, m, bool(issues))
+            rows.append(
+                {
+                    "file_id": self.file_id,
+                    "index": feature.index,
+                    "layer": feature.layer,
+                    "source_id": feature.source_id,
+                    "geometry_type": feature.geometry_type,
+                    "crs": setup.label,
+                    "has_z": bool(has_z[i]),
+                    "geometry": source_json[i],
+                    "geometry_wgs84": wgs84_json[i],
+                    "properties": feature.properties,
+                    "status": m.status.value,
+                    "area_m2": m.area_m2,
+                    "perimeter_m": m.perimeter_m,
+                    "length_m": m.length_m,
+                    "geodesic_area_m2": m.geodesic_area_m2,
+                    "geodesic_perimeter_m": m.geodesic_perimeter_m,
+                    "geodesic_length_m": m.geodesic_length_m,
+                    "deviation_pct": m.deviation_pct,
+                    "method": m.method.value if m.method else None,
+                    "projections": m.projections,
+                    "issues": issues,
+                }
+            )
+        return rows
+
+    def _track(self, feature: Feature, m: Measurement, has_issues: bool) -> None:
         self.count += 1
         self._types[feature.geometry_type or "None"] += 1
         self._statuses[m.status.value] += 1
@@ -215,16 +250,22 @@ class ResultBuilder:
                 self._totals[key] = self._totals.get(key, 0.0) + value
         if m.deviation_pct is not None:
             self._max_deviation = max(self._max_deviation or 0.0, m.deviation_pct)
-        if wgs84 is not None:
-            b = wgs84.bounds
-            if all(math.isfinite(v) for v in b):
-                cur = self._bounds or b
-                self._bounds = (
-                    min(cur[0], b[0]),
-                    min(cur[1], b[1]),
-                    max(cur[2], b[2]),
-                    max(cur[3], b[3]),
-                )
+
+    def _track_bounds(self, geoms: np.ndarray) -> None:
+        b = shapely.bounds(geoms)
+        if np.isnan(b).all():
+            return
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            batch = np.array(
+                [np.nanmin(b[:, 0]), np.nanmin(b[:, 1]), np.nanmax(b[:, 2]), np.nanmax(b[:, 3])]
+            )
+        if self._bounds is None:
+            self._bounds = batch
+        else:
+            self._bounds = np.concatenate(
+                [np.minimum(self._bounds[:2], batch[:2]), np.maximum(self._bounds[2:], batch[2:])]
+            )
 
     def outcome(self, fmt: str, processing_ms: int) -> repository.Outcome:
         labels = {info["crs"] for info in self._layer_info if info["crs"]}
@@ -244,7 +285,7 @@ class ResultBuilder:
             format=fmt,
             crs=crs,
             feature_count=self.count,
-            bbox=list(self._bounds) if self._bounds else None,
+            bbox=[float(v) for v in self._bounds] if self._bounds is not None else None,
             layers=self._layer_info,
             summary=summary,
             issues=[i.as_dict() for i in self.issues],

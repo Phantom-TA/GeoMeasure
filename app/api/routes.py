@@ -344,13 +344,12 @@ def _geojson_stream(factory: sessionmaker[Session], file_id: str, name: str) -> 
                     "_issues": [i["code"] for i in r.issues or []],
                 }
             )
-            feature = {
-                "type": "Feature",
-                "id": r.index,
-                "geometry": r.geometry_wgs84,
-                "properties": properties,
-            }
-            yield (b"" if first else b",") + json.dumps(feature).encode()
+            # geometry is stored as GeoJSON text, so it is spliced in without re-parsing
+            feature = (
+                f'{{"type":"Feature","id":{r.index},"geometry":{r.geometry_wgs84 or "null"},'
+                f'"properties":{json.dumps(properties)}}}'
+            )
+            yield (b"" if first else b",") + feature.encode()
             first = False
     yield b"]}"
 
