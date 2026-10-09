@@ -1,6 +1,6 @@
 # GeoMeasure: Geospatial File Measurement API
 
-[![CI](https://github.com/Phantom-TA/Aereo/actions/workflows/ci.yml/badge.svg)](https://github.com/Phantom-TA/Aereo/actions/workflows/ci.yml)
+[![CI](https://github.com/Phantom-TA/GeoMeasure/actions/workflows/ci.yml/badge.svg)](https://github.com/Phantom-TA/GeoMeasure/actions/workflows/ci.yml)
 
 A FastAPI service that accepts a **Shapefile** (zipped), **KML** or **KMZ**, extracts every
 feature (ID, geometry type, geometry, CRS, properties), and measures it: **area and
