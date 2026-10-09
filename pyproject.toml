@@ -16,6 +16,9 @@ dependencies = [
     "sqlalchemy>=2.0",
 ]
 
+[project.scripts]
+geomeasure = "app.cli:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8",
