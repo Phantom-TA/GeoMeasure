@@ -109,6 +109,13 @@ def test_polygon_with_hole():
     assert rel(m.area_m2, truth) < 1e-5
     assert rel(m.geodesic_area_m2, truth) < 1e-5
 
+    # perimeter counts the hole's ring too, on both the projected and the geodesic side
+    outer_only = measure_geometry(Polygon(outer), WGS84).perimeter_m
+    hole_only = measure_geometry(Polygon(hole), WGS84).perimeter_m
+    assert m.perimeter_m == pytest.approx(outer_only + hole_only, rel=1e-9)
+    assert m.geodesic_perimeter_m == pytest.approx(m.perimeter_m, rel=1e-6)
+    assert m.deviation_pct < 1e-3
+
 
 def test_antimeridian_polygon():
     poly = Polygon([(179.99, 0), (-179.99, 0), (-179.99, 0.01), (179.99, 0.01)])

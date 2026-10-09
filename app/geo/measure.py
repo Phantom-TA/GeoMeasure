@@ -214,9 +214,12 @@ def _geodesic(polygons: list[Polygon], lines: list[LineString], ctx: CrsContext)
         out.area = out.perimeter = 0.0
         for p in polygons:
             # pyproj needs CCW exteriors and CW holes to subtract holes correctly
-            area, perimeter = ctx.geod.geometry_area_perimeter(orient(p, 1.0))
+            area, _ = ctx.geod.geometry_area_perimeter(orient(p, 1.0))
             out.area += abs(area)
-            out.perimeter += perimeter
+            # ...but its perimeter ignores holes; like shapely/QGIS we count every ring
+            out.perimeter += sum(
+                ctx.geod.geometry_length(ring) for ring in (p.exterior, *p.interiors)
+            )
     if lines:
         out.length = sum(ctx.geod.geometry_length(ln) for ln in lines)
     return out
