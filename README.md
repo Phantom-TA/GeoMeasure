@@ -74,7 +74,7 @@ curl -H "Prefer: wait=10" -F "file=@samples/farm_survey.kml" http://localhost:80
 curl http://localhost:8000/api/files/<id>/measurements/
 ```
 
-Or measure a file without running the server, through the same pipeline:
+Or measure a file without starting the server, using the same pipeline:
 
 ```bash
 geomeasure measure samples/parcels_utm43n.zip
