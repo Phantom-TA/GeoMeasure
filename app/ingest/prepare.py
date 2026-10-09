@@ -140,8 +140,14 @@ def load_layers(
             layers.extend(read_kml(source.kml, start_index=index, crs_override=crs_override))
         except ReadError as exc:
             raise IngestError(exc.code, exc.message) from exc
+        if not layers:
+            # a well-formed KML with no placemarks is a valid, empty file, not an error
+            issues.append(Issue("no_features", "The file contains no features."))
+            return layers, issues
 
     if not layers:
         details = "; ".join(i.message for i in issues if i.code == "unreadable_layer")
         raise IngestError("no_readable_layers", details or "No readable layers in the file.")
+    if not any(layer.features for layer in layers):
+        issues.append(Issue("no_features", "The file contains no features."))
     return layers, issues

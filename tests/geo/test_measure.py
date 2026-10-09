@@ -205,6 +205,39 @@ def test_unmeasurable_inputs(geom, status, code):
     assert code in codes(m)
 
 
+def test_lonlat_hint_gives_identical_results():
+    ctx = CrsContext.build(CRS.from_epsg(32643))
+    square = box(500_000, 3_100_000, 501_000, 3_101_000)
+    hint = transform(square, ctx.to_lonlat)
+    with_hint = measure_geometry(square, ctx, lonlat=hint)
+    without = measure_geometry(square, ctx)
+    assert with_hint == without
+
+
+def test_lonlat_hint_ignored_after_repair():
+    ctx = CrsContext.build(CRS.from_epsg(32643))
+    bowtie = Polygon(
+        [(500_000, 3_100_000), (501_000, 3_101_000), (501_000, 3_100_000), (500_000, 3_101_000)]
+    )
+    wrong_hint = box(0, 0, 1, 1)  # would give a wildly different result if trusted
+    m = measure_geometry(bowtie, ctx, lonlat=wrong_hint)
+    assert m.area_m2 == pytest.approx(500_000)
+    assert "geometry_repaired" in codes(m)
+
+
+@pytest.mark.parametrize("bounds", [(10, 95, 10.01, 95.01), (1000, 10, 1000.01, 10.01)])
+def test_out_of_range_lonlat(bounds):
+    m = measure_geometry(box(*bounds), WGS84)
+    assert m.status is MeasureStatus.ERROR
+    assert "invalid_coordinates" in codes(m)
+
+
+def test_0_360_longitudes_accepted():
+    m = measure_geometry(box(200.0, 10.0, 200.01, 10.01), WGS84)
+    assert m.status is MeasureStatus.OK
+    assert rel(m.area_m2, cell_area(10.0, 10.01, 0.01)) < 1e-6
+
+
 def test_unknown_crs():
     m = measure_geometry(box(0, 0, 1, 1), None)
     assert m.status is MeasureStatus.ERROR

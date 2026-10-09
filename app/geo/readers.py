@@ -21,20 +21,10 @@ from app.geo.types import Feature, Issue, Layer
 # GDAL can rebuild a missing .shx index from the .shp itself.
 pyogrio.set_gdal_config_options({"SHAPE_RESTORE_SHX": "YES"})
 
-# Fields the LIBKML driver adds to every placemark; dropped when they hold their default.
-_KML_DEFAULTS: dict[str, Any] = {
-    "id": None,
-    "description": None,
-    "timestamp": None,
-    "begin": None,
-    "end": None,
-    "altitudeMode": None,
-    "tessellate": -1,
-    "extrude": 0,
-    "visibility": -1,
-    "drawOrder": None,
-    "icon": None,
-}
+# Fields the LIBKML driver adds to every placemark. Rendering hints are always dropped;
+# the rest only when unset, since e.g. begin/end carry the times of a GPS track.
+_KML_RENDERING = {"tessellate", "extrude", "visibility", "drawOrder", "icon"}
+_KML_OPTIONAL = {"id", "description", "timestamp", "begin", "end", "altitudeMode"}
 
 
 class ReadError(Exception):
@@ -136,7 +126,9 @@ def _read_layer(
         if is_kml:
             source_id = props.get("id")
             props = {
-                k: v for k, v in props.items() if not (k in _KML_DEFAULTS and v == _KML_DEFAULTS[k])
+                k: v
+                for k, v in props.items()
+                if k not in _KML_RENDERING and not (k in _KML_OPTIONAL and v is None)
             }
             props.pop("id", None)
 

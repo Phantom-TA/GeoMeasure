@@ -106,3 +106,15 @@ def test_null_geometry_kept_as_feature(tmp_path):
     shp = write_shapefile(tmp_path, "nulls", [box(77, 28, 77.01, 28.01), None])
     features = read_shapefile(ShapefileSource("nulls", shp)).features
     assert len(features) == 2 and features[1].geometry is None
+
+
+def test_google_earth_export(tmp_path):
+    from tests.samples import GOOGLE_EARTH_KML
+
+    p = tmp_path / "ge.kml"
+    p.write_text(GOOGLE_EARTH_KML, encoding="utf-8")
+    plot, track = read_kml(p)[0].features  # the NetworkLink is not followed
+    assert plot.properties == {"Name": "Plot 7", "plot_no": 7, "area_ha": 1.25}
+    assert track.geometry_type == "LineString"  # gx:Track becomes a line
+    assert track.properties["begin"] == "2024-05-01T10:00:00Z"
+    assert track.properties["end"] == "2024-05-01T10:02:00Z"

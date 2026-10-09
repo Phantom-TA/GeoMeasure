@@ -40,6 +40,70 @@ FIELDS_KML = """<?xml version="1.0" encoding="UTF-8"?>
 """
 
 
+# Typical Google Earth export: styles, typed SchemaData, a gx:Track, and a NetworkLink.
+GOOGLE_EARTH_KML = """<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2" xmlns:gx="http://www.google.com/kml/ext/2.2">
+<Document>
+  <name>Site survey.kmz</name>
+  <Style id="s1"><LineStyle><color>ff0000ff</color></LineStyle></Style>
+  <Schema name="plot" id="plotSchema">
+    <SimpleField type="int" name="plot_no"/><SimpleField type="double" name="area_ha"/>
+  </Schema>
+  <Placemark>
+    <name>Plot 7</name><styleUrl>#s1</styleUrl>
+    <ExtendedData><SchemaData schemaUrl="#plotSchema">
+      <SimpleData name="plot_no">7</SimpleData><SimpleData name="area_ha">1.25</SimpleData>
+    </SchemaData></ExtendedData>
+    <Polygon><tessellate>1</tessellate><outerBoundaryIs><LinearRing><coordinates>
+      77.0,28.0,0 77.01,28.0,0 77.01,28.01,0 77.0,28.01,0 77.0,28.0,0
+    </coordinates></LinearRing></outerBoundaryIs></Polygon>
+  </Placemark>
+  <Placemark><name>Drone flight</name>
+    <gx:Track>
+      <when>2024-05-01T10:00:00Z</when>
+      <when>2024-05-01T10:01:00Z</when>
+      <when>2024-05-01T10:02:00Z</when>
+      <gx:coord>77.0 28.0 120</gx:coord>
+      <gx:coord>77.01 28.0 120</gx:coord>
+      <gx:coord>77.02 28.0 125</gx:coord>
+    </gx:Track>
+  </Placemark>
+  <NetworkLink><name>remote</name><Link><href>http://example.com/x.kml</href></Link></NetworkLink>
+</Document></kml>
+"""
+
+
+def kml_document(*placemarks: str) -> bytes:
+    body = "".join(placemarks)
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        f'<kml xmlns="http://www.opengis.net/kml/2.2"><Document>{body}</Document></kml>'
+    ).encode()
+
+
+def kml_polygon(coords: Sequence[tuple[float, ...]], name: str = "poly") -> str:
+    ring = " ".join(",".join(str(c) for c in pt) for pt in [*coords, coords[0]])
+    return (
+        f"<Placemark><name>{name}</name><Polygon><outerBoundaryIs><LinearRing>"
+        f"<coordinates>{ring}</coordinates></LinearRing></outerBoundaryIs></Polygon></Placemark>"
+    )
+
+
+def kml_line(coords: Sequence[tuple[float, ...]], name: str = "line") -> str:
+    pts = " ".join(",".join(str(c) for c in pt) for pt in coords)
+    return (
+        f"<Placemark><name>{name}</name>"
+        f"<LineString><coordinates>{pts}</coordinates></LineString></Placemark>"
+    )
+
+
+def kml_point(lon: float, lat: float, name: str = "pt") -> str:
+    return (
+        f"<Placemark><name>{name}</name>"
+        f"<Point><coordinates>{lon},{lat}</coordinates></Point></Placemark>"
+    )
+
+
 def write_shapefile(
     directory: Path,
     name: str,

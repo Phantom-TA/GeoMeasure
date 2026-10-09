@@ -53,14 +53,21 @@ def measure_geometry(
     geom: BaseGeometry | None,
     ctx: CrsContext | None,
     options: MeasureOptions | None = None,
+    *,
+    lonlat: BaseGeometry | None = None,
 ) -> Measurement:
+    """Measure one feature.
+
+    `lonlat` may carry the geometry already converted to lon/lat (done in bulk by the
+    caller for speed); it is only trusted if the geometry needed no repair.
+    """
     options = options or MeasureOptions()
     if geom is None:
         return _fail(MeasureStatus.SKIPPED, "no_geometry", "Feature has no geometry.")
     if geom.is_empty:
         return _fail(MeasureStatus.SKIPPED, "empty_geometry", "Feature geometry is empty.")
     try:
-        return _measure(geom, ctx, options)
+        return _measure(geom, ctx, options, lonlat)
     except _MeasureError as exc:
         return Measurement(MeasureStatus.ERROR, issues=[exc.issue])
     except (ProjError, GEOSException, ValueError) as exc:
@@ -71,7 +78,12 @@ def _fail(status: MeasureStatus, code: str, message: str) -> Measurement:
     return Measurement(status, issues=[Issue(code, message)])
 
 
-def _measure(geom: BaseGeometry, ctx: CrsContext | None, options: MeasureOptions) -> Measurement:
+def _measure(
+    geom: BaseGeometry,
+    ctx: CrsContext | None,
+    options: MeasureOptions,
+    lonlat_hint: BaseGeometry | None,
+) -> Measurement:
     issues: list[Issue] = []
     geom = shapely.force_2d(geom)
     if has_nonfinite(geom):
@@ -88,7 +100,9 @@ def _measure(geom: BaseGeometry, ctx: CrsContext | None, options: MeasureOptions
     if ctx is None:
         raise _MeasureError(Issue("crs_unknown", "Cannot measure without a known CRS."))
 
-    ll_polygons, ll_lines, unwrapped = _to_lonlat(polygons, lines, ctx)
+    hint = None if repaired or ctx.to_lonlat is None else lonlat_hint
+    ll_polygons, ll_lines, unwrapped = _to_lonlat(polygons, lines, ctx, hint)
+    _check_lonlat_range([*ll_polygons, *ll_lines], ctx)
     if unwrapped:
         issues.append(Issue("antimeridian_normalized", "Geometry crosses the antimeridian."))
 
@@ -143,21 +157,34 @@ def _measure(geom: BaseGeometry, ctx: CrsContext | None, options: MeasureOptions
 
 
 def _to_lonlat(
-    polygons: list[Polygon], lines: list[LineString], ctx: CrsContext
+    polygons: list[Polygon],
+    lines: list[LineString],
+    ctx: CrsContext,
+    hint: BaseGeometry | None = None,
 ) -> tuple[list[Polygon], list[LineString], bool]:
+    if hint is not None:
+        hint_polygons, hint_lines = split_parts(shapely.force_2d(hint))
+        if len(hint_polygons) == len(polygons) and len(hint_lines) == len(lines):
+            polygons, lines = hint_polygons, hint_lines
+            needs_transform = False
+        else:
+            needs_transform = ctx.to_lonlat is not None
+    else:
+        needs_transform = ctx.to_lonlat is not None
+
     unwrapped = False
 
     def convert(part: Polygon | LineString) -> Polygon | LineString:
         nonlocal unwrapped
-        if ctx.to_lonlat is not None:
+        if needs_transform and ctx.to_lonlat is not None:
             part = transform(part, ctx.to_lonlat)
-            if has_nonfinite(part):
-                raise _MeasureError(
-                    Issue(
-                        "projection_failed",
-                        f"Coordinates are outside the valid area of {ctx.label}.",
-                    )
+        if ctx.to_lonlat is not None and has_nonfinite(part):
+            raise _MeasureError(
+                Issue(
+                    "projection_failed",
+                    f"Coordinates are outside the valid area of {ctx.label}.",
                 )
+            )
         part, changed = unwrap_antimeridian(part)
         unwrapped |= changed
         return part
@@ -165,6 +192,20 @@ def _to_lonlat(
     ll_polygons = [p for p in map(convert, polygons) if isinstance(p, Polygon)]
     ll_lines = [ln for ln in map(convert, lines) if isinstance(ln, LineString)]
     return ll_polygons, ll_lines, unwrapped
+
+
+def _check_lonlat_range(parts: list[Polygon] | list[LineString], ctx: CrsContext) -> None:
+    # Longitudes beyond +/-180 are legitimate (0-360 data, unwrapped antimeridian shapes);
+    # beyond +/-360, or any latitude beyond +/-90, means the CRS is almost certainly wrong.
+    minx, miny, maxx, maxy = _bounds(parts)
+    if miny < -90 or maxy > 90 or minx < -360 or maxx > 360:
+        raise _MeasureError(
+            Issue(
+                "invalid_coordinates",
+                f"Coordinates are not valid longitude/latitude for {ctx.label}; "
+                "the file's CRS is probably wrong (pass ?crs=EPSG:xxxx).",
+            )
+        )
 
 
 def _geodesic(polygons: list[Polygon], lines: list[LineString], ctx: CrsContext) -> _Values:
