@@ -1,0 +1,6 @@
+* text=auto eol=lf
+*.zip binary
+*.kmz binary
+*.shp binary
+*.shx binary
+*.dbf binary
