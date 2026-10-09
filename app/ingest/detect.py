@@ -10,7 +10,7 @@ from app.ingest.errors import IngestError
 
 _ZIP_MAGIC = (b"PK\x03\x04", b"PK\x05\x06")
 _SNIFF_BYTES = 64 * 1024
-_KML_ROOT = re.compile(rb"<(?:[\w-]+:)?kml[\s>]", re.IGNORECASE)
+_KML_ROOT = re.compile(rb"<(?:[\w-]+:)?kml[\s/>]", re.IGNORECASE)
 _DTD = re.compile(rb"<!(?:DOCTYPE|ENTITY)", re.IGNORECASE)
 
 

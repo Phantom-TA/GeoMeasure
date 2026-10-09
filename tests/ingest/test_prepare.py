@@ -53,6 +53,18 @@ def test_plain_kml(run):
     assert sum(len(layer.features) for layer in layers) == 4
 
 
+@pytest.mark.parametrize(
+    "root",
+    [b"<kml/>", b"<kml></kml>", b'<kml:kml xmlns:kml="http://www.opengis.net/kml/2.2"/>'],
+)
+def test_kml_root_variants_detected(tmp_path, root):
+    from app.ingest.detect import Container, detect_container
+
+    p = tmp_path / "x.kml"
+    p.write_bytes(b'<?xml version="1.0"?>' + root)
+    assert detect_container(p, "x.kml") is Container.KML
+
+
 def test_kml_with_bom_and_whitespace(run):
     source, _ = run(b"\xef\xbb\xbf\n  " + FIELDS_KML.encode(), "survey.kml")
     assert source.format is SourceFormat.KML
