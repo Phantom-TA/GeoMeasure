@@ -38,3 +38,18 @@ def test_json_log_format():
     assert entry["message"] == "hello world"
     assert entry["request_id"] == "req-1"
     assert entry["level"] == "INFO"
+
+
+def test_viewer_served_with_csp(client):
+    res = client.get("/")
+    assert res.status_code == 200
+    assert "<title>GeoMeasure</title>" in res.text
+    csp = res.headers["content-security-policy"]
+    assert "default-src 'self'" in csp and "frame-ancestors 'none'" in csp
+    assert "unsafe-inline" not in csp
+
+
+def test_viewer_assets(client):
+    assert client.get("/static/viewer.js").status_code == 200
+    assert client.get("/static/viewer.css").status_code == 200
+    assert "/" not in client.get("/openapi.json").json()["paths"]  # not part of the API

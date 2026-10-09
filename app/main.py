@@ -1,7 +1,10 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
 from app import __version__
@@ -29,6 +32,16 @@ geodesic calculation on the ellipsoid.
 
 # Room for multipart boundaries and form fields on top of the file itself.
 _MULTIPART_OVERHEAD = 64 * 1024
+
+STATIC_DIR = Path(__file__).parent / "static"
+_CSP = (
+    "default-src 'self'; "
+    "script-src 'self' https://unpkg.com; "
+    "style-src 'self' https://unpkg.com; "
+    "img-src 'self' data: https://tile.openstreetmap.org; "
+    "connect-src 'self'; "
+    "frame-ancestors 'none'"
+)
 
 
 def create_app(settings: Settings | None = None, job_fn: JobFn = process_file) -> FastAPI:
@@ -58,6 +71,12 @@ def create_app(settings: Settings | None = None, job_fn: JobFn = process_file) -
     errors.install(app)
     app.include_router(router, prefix="/api", tags=["files"])
     app.include_router(health_router)
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+    @app.get("/", include_in_schema=False)
+    def viewer() -> FileResponse:
+        return FileResponse(STATIC_DIR / "index.html", headers={"Content-Security-Policy": _CSP})
+
     app.add_middleware(
         BodySizeLimitMiddleware, max_bytes=settings.max_upload_bytes + _MULTIPART_OVERHEAD
     )
