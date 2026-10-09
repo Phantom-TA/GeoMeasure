@@ -39,8 +39,8 @@ accurate it is.
 | **Messy real-world files** | Nested folders, several Shapefiles per zip, missing `.prj`/`.shx`/`.dbf`, legacy encodings, uppercase extensions, macOS junk, KML folders, `MultiGeometry`, `gx:Track`, 3D coordinates, self-intersecting polygons (repaired), shapes crossing the antimeridian, polar shapes. |
 | **Graceful by design** | Points, empty or null geometries, unknown CRSs and broken shapes get a per-feature `status` and machine-readable `issues`; one bad feature never fails the file. |
 | **Secure by construction** | Content-based format detection, size limits enforced while streaming, zip-bomb checks, KML with DTD/entities refused (XXE / billion laughs), and archive paths never touch the disk, so zip-slip cannot happen. |
-| **Production plumbing** | Background processing in **crash-isolated worker processes**, job state in the database (survives restarts), poison-pill protection, RFC 9457 errors, request IDs, JSON logs, Docker, CI. |
-| **Easy to review** | A map viewer at `/`, interactive docs at `/docs`, sample files in [`samples/`](samples), a CLI, and 174 tests at 97 % coverage. |
+| **Production plumbing** | Background processing in **crash-isolated worker processes** that also exit if the API is killed, job state in the database (survives restarts), poison-pill protection, RFC 9457 errors, request IDs, JSON logs, Docker, CI. |
+| **Easy to review** | A map viewer at `/`, interactive docs at `/docs`, sample files in [`samples/`](samples), a CLI, and 175 tests at 96 % coverage. |
 
 ## Quick start
 
@@ -534,7 +534,9 @@ turns "trust me" into a number. It also drives the automatic fallback for bad so
 **Background processing in a process pool.** Parsing untrusted files runs native code (GDAL).
 In worker processes, a crash kills one worker, not the API; the runner rebuilds the pool and
 retries, and `claim()` gives up after `max_attempts`, so a poison file ends `FAILED` instead of
-looping. A test reproduces this with a real crash (`os._exit`).
+looping. A test reproduces this with a real crash (`os._exit`). The reverse also holds: each
+worker watches its parent's process handle and exits if the API process is killed outright, so
+no orphaned workers are left behind (another test kills the API process to prove it).
 - *FastAPI `BackgroundTasks` or threads*: no crash isolation, and they compete with request
   handling for the GIL. Threads remain available (`GEO_WORKER_MODE=thread`).
 - *Celery + Redis*: the right tool across many machines, but two extra services for one. The
@@ -587,8 +589,8 @@ All settings are environment variables with the `GEO_` prefix (see [`.env.exampl
 ## Testing
 
 ```bash
-pytest                      # 174 tests
-pytest --cov=app            # 97 % coverage
+pytest                      # 175 tests
+pytest --cov=app            # 96 % coverage
 ruff check . && mypy app    # lint + strict type checking
 ```
 
@@ -596,7 +598,7 @@ ruff check . && mypy app    # lint + strict type checking
 |---|---|
 | `tests/geo` | Measurements against closed-form ellipsoid formulas at many latitudes, holes, multi-parts, antimeridian, poles, UTM/UPS, Web Mercator, feet, area-of-use, fallback, repair, the CRS rules, the readers |
 | `tests/ingest` | Hostile and messy archives: zip bomb, encrypted entries, path traversal, too many entries, lying sizes, DTD/XXE, nested folders, junk files, missing sidecars, legacy encodings, KMZ |
-| `tests/api` | Every endpoint, filters, pagination, errors, `Prefer: wait`, reprocessing, deletion, **crash recovery on restart**, **a worker killed three times by a poison file**, parallel uploads in thread and process mode, request IDs |
+| `tests/api` | Every endpoint, filters, pagination, errors, `Prefer: wait`, reprocessing, deletion, **crash recovery on restart**, **a worker killed three times by a poison file**, **workers exiting when the API process is killed**, parallel uploads in thread and process mode, request IDs |
 | `tests/test_samples_and_cli.py` | The committed sample files produce what this README says, and the CLI |
 
 CI runs lint, strict type checks and the tests on Linux (Python 3.11, 3.12) and Windows, then
