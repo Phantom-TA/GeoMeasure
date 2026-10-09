@@ -6,7 +6,11 @@ from starlette.concurrency import run_in_threadpool
 
 from app import __version__
 from app.api import errors
-from app.api.middleware import BodySizeLimitMiddleware, TrailingSlashMiddleware
+from app.api.middleware import (
+    BodySizeLimitMiddleware,
+    RequestContextMiddleware,
+    TrailingSlashMiddleware,
+)
 from app.api.routes import health_router, router
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
@@ -29,7 +33,7 @@ _MULTIPART_OVERHEAD = 64 * 1024
 
 def create_app(settings: Settings | None = None, job_fn: JobFn = process_file) -> FastAPI:
     settings = settings or get_settings()
-    configure_logging()
+    configure_logging(settings.log_level, settings.log_format)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -58,6 +62,7 @@ def create_app(settings: Settings | None = None, job_fn: JobFn = process_file) -
         BodySizeLimitMiddleware, max_bytes=settings.max_upload_bytes + _MULTIPART_OVERHEAD
     )
     app.add_middleware(TrailingSlashMiddleware)
+    app.add_middleware(RequestContextMiddleware)  # outermost: sees every response, even 413s
     return app
 
 

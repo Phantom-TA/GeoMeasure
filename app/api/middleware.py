@@ -1,10 +1,55 @@
 from __future__ import annotations
 
 import json
+import logging
+import re
+import time
+import uuid
 from http import HTTPStatus
 
 from starlette.exceptions import HTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+from app.core.logging import request_id_var
+
+log = logging.getLogger("app.access")
+
+_SAFE_REQUEST_ID = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+
+class RequestContextMiddleware:
+    """Tag each request with an ID (client-supplied or generated) and log its outcome."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        supplied = dict(scope["headers"]).get(b"x-request-id", b"").decode("latin-1")
+        request_id = supplied if _SAFE_REQUEST_ID.match(supplied) else uuid.uuid4().hex[:16]
+        token = request_id_var.set(request_id)
+        started = time.perf_counter()
+        status = 500
+
+        async def send_with_id(message: Message) -> None:
+            nonlocal status
+            if message["type"] == "http.response.start":
+                status = message["status"]
+                message["headers"] = [
+                    *message.get("headers", []),
+                    (b"x-request-id", request_id.encode()),
+                ]
+            await send(message)
+
+        try:
+            await self.app(scope, receive, send_with_id)
+        finally:
+            elapsed = (time.perf_counter() - started) * 1000
+            log.info("%s %s -> %d (%.1f ms)", scope["method"], scope["path"], status, elapsed)
+            request_id_var.reset(token)
 
 
 class BodyTooLarge(HTTPException):

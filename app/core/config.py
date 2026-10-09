@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     default_strategy: Strategy = Strategy.AUTO
     geodesic_warn_pct: float = Field(default=0.5, gt=0)
 
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+    log_format: Literal["text", "json"] = "text"
+
     @property
     def upload_dir(self) -> Path:
         return self.data_dir / "uploads"
