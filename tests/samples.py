@@ -48,6 +48,7 @@ def write_shapefile(
     crs: str | None = "EPSG:4326",
     fields: dict[str, list[object]] | None = None,
     geometry_type: str = "Polygon",
+    encoding: str | None = None,
 ) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     fields = fields or {"name": [f"f{i}" for i in range(len(geometries))]}
@@ -60,6 +61,7 @@ def write_shapefile(
         crs=crs,
         geometry_type=geometry_type,
         driver="ESRI Shapefile",
+        encoding=encoding,
     )
     return path
 
