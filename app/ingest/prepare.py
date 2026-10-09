@@ -30,6 +30,24 @@ class PreparedSource:
     issues: list[Issue] = field(default_factory=list)
 
 
+def precheck(upload: Path, filename: str, limits: ArchiveLimits | None = None) -> None:
+    """Cheap checks run while the client waits, so obviously bad uploads fail immediately.
+
+    Reads at most the first 64 KB and the zip's central directory; no decompression.
+    """
+    if detect_container(upload, filename) is Container.KML:
+        return
+    try:
+        with zipfile.ZipFile(upload) as zf:
+            contents = inspect_zip(zf, limits or ArchiveLimits())
+    except zipfile.BadZipFile as exc:
+        raise IngestError("invalid_archive", f"The zip file is corrupt: {exc}") from exc
+    if not contents.shapefiles and not contents.kml:
+        raise IngestError(
+            "no_supported_data", "The archive contains no Shapefile (.shp) or KML file."
+        )
+
+
 def prepare(
     upload: Path, filename: str, workdir: Path, limits: ArchiveLimits | None = None
 ) -> PreparedSource:
